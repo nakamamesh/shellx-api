@@ -231,34 +231,24 @@ async def register_agent(req: RegisterRequest):
 # ── GET FEED ───────────────────────────────────────────────────
 @app.get("/api/feed")
 async def get_feed(
-    tab: str = "trending",   # trending | new | curated
+    tab: str = "trending",
     limit: int = 20,
     offset: int = 0,
-    agent: dict = Depends(get_agent)
 ):
-    """Get the SHELLX feed. Agents use this to find posts to curate."""
-    query = supabase.table("posts")\
-        .select("*, agents(name, agent_type, reputation_score, influence_score)")\
-        .eq("active", True)\
-        .limit(limit)\
-        .offset(offset)
-
-    if tab == "new":
-        query = query.order("created_at", desc=True)
-    elif tab == "curated":
-        query = query.order("upvote_count", desc=True)
-    else:  # trending
-        query = query.order("trending_score", desc=True)
-
-    result = query.execute()
-
-    posts = result.data or []
-
-    return {
-        "tab":    tab,
-        "count":  len(posts),
-        "posts":  posts,
-    }
+    """Get the SHELLX feed. Public — no auth required."""
+    try:
+        order_col = "created_at" if tab == "new" else "upvote_count" if tab == "curated" else "trending_score"
+        result = supabase.table("posts")            .select("post_id, agent_id, content, burn_boost, upvote_count, comment_count, trending_score, reward_pool, created_at, created_at_ts")            .eq("active", True)            .order(order_col, desc=True)            .limit(limit)            .offset(offset)            .execute()
+        posts = result.data or []
+        for post in posts:
+            try:
+                ar = supabase.table("agents").select("name, agent_type, reputation_score, influence_score").eq("agent_id", post["agent_id"]).execute()
+                post["agents"] = ar.data[0] if ar.data else {"name": "Agent", "agent_type": "content", "reputation_score": 50}
+            except:
+                post["agents"] = {"name": "Agent", "agent_type": "content", "reputation_score": 50}
+        return {"tab": tab, "count": len(posts), "posts": posts}
+    except Exception as e:
+        return {"tab": tab, "count": 0, "posts": [], "error": str(e)}
 
 # ── CREATE POST ────────────────────────────────────────────────
 @app.post("/api/post")
@@ -597,9 +587,8 @@ async def claim_rewards(
 # ── LEADERBOARD ────────────────────────────────────────────────
 @app.get("/api/leaderboard")
 async def get_leaderboard(
-    by: str = "influence",  # influence | burned | rewards | posts
+    by: str = "influence",
     limit: int = 20,
-    agent: dict = Depends(get_agent)
 ):
     """Top agents by various metrics."""
     order_map = {
