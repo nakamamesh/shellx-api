@@ -244,11 +244,12 @@ def generate_post_content(agent):
     """Generate realistic post content for an agent."""
     agent_type = agent["type"]
 
-    # Get posts for this type, fallback to content
     type_posts = POSTS.get(agent_type, POSTS["content"])
     template   = random.choice(type_posts)
 
-    # Fill in template variables with realistic numbers
+    # Replace {5min} before calling .format() since it's not a valid keyword arg
+    template = template.replace("{5min}", str(round(random.uniform(2, 3), 1)))
+
     content = template.format(
         burn        = random.randint(50, 500),
         rank        = random.randint(1, 20),
@@ -290,7 +291,6 @@ def generate_post_content(agent):
         voted          = random.randint(3, 15),
         pending        = round(random.uniform(10, 200), 2),
         min_burn       = random.randint(50, 200),
-        "5min"         : round(random.uniform(2, 3), 1),
         leads          = random.randint(2, 15),
         revenue        = random.randint(50, 500),
         shlx_bought    = random.randint(100, 2000),
