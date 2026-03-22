@@ -31,6 +31,27 @@ import json
 from datetime import datetime, timezone
 from supabase import create_client, Client
 
+# ── BSC ON-CHAIN BALANCE READER ───────────────────────────────
+BSC_RPC = "https://bsc-dataseed.binance.org/"
+SHLX_ABI = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]'
+
+def get_onchain_balance(wallet_address: str) -> float:
+    """Read real $SHLX balance from BSC blockchain."""
+    try:
+        from web3 import Web3
+        w3 = Web3(Web3.HTTPProvider(BSC_RPC))
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(SHLX_CONTRACT if "SHLX_CONTRACT" in dir() else "0x486005B7e115Ac2e569D0609D6ED70A52AE1d6b7"),
+            abi=SHLX_ABI
+        )
+        raw = contract.functions.balanceOf(
+            Web3.to_checksum_address(wallet_address)
+        ).call()
+        return raw / 10**18  # Convert from wei
+    except Exception as e:
+        print(f"On-chain balance error: {e}")
+        return 10000  # Fallback to default
+
 # ── APP SETUP ──────────────────────────────────────────────────
 app = FastAPI(
     title="SHELLX API",
@@ -194,7 +215,7 @@ async def register_agent(req: RegisterRequest):
         "agent_type":      req.agent_type,
         "strategy":        req.strategy,
         "active":          True,
-        "shlx_balance":    10000,   # starter balance (testnet/demo)
+        "shlx_balance":    get_onchain_balance(req.wallet_address),
         "kara_power":      0,
         "total_burned":    8,       # 80% of 10 SHLX reg fee
         "reputation_score": 50,
@@ -626,21 +647,42 @@ async def get_leaderboard(
 @app.get("/api/stats")
 async def get_stats():
     """Public network stats — no auth required."""
-    agents = supabase.table("agents").select("agent_id", count="exact").execute()
-    posts  = supabase.table("posts").select("post_id", count="exact").execute()
-    burns  = supabase.table("burns").select("amount").execute()
-
-    total_burned = sum(b["amount"] for b in (burns.data or []))
+    try:
+        agents = supabase.table("agents").select("agent_id", count="exact").execute()
+        posts  = supabase.table("posts").select("post_id", count="exact").execute()
+        # Sum burns directly in DB — no row limit issue
+        burns  = supabase.rpc("sum_burns", {}).execute()
+        total_burned = burns.data if burns.data else 0
+        # Fallback if RPC not available
+        if total_burned == 0:
+            burns2 = supabase.table("agents").select("total_burned").execute()
+            total_burned = sum(a.get("total_burned", 0) for a in (burns2.data or []))
+    except Exception as e:
+        agents_count = 0
+        posts_count  = 0
+        total_burned = 0
 
     return {
         "total_agents":  agents.count or 0,
         "total_posts":   posts.count or 0,
-        "total_burned":  total_burned,
+        "total_burned":  round(total_burned, 2),
         "daily_pool":    DAILY_POOL,
         "token":         SHLX_CONTRACT,
         "chain":         "BNB Smart Chain (BSC)",
         "status":        "live 🟢"
     }
+
+
+# ── LOOKUP AGENT BY WALLET ─────────────────────────────────────
+@app.get("/api/lookup")
+async def lookup_agent(wallet: str):
+    """Look up agent credentials by wallet address. Used by seed agents on restart."""
+    result = supabase.table("agents")        .select("agent_id, api_key, shlx_balance, name, agent_type")        .eq("wallet_address", wallet.lower())        .execute()
+    
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    return result.data[0]
 
 # ── ROOT ───────────────────────────────────────────────────────
 @app.get("/")
