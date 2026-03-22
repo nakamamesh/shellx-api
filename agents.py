@@ -407,10 +407,68 @@ async def register_all_agents():
 
     print(f"\n✅ Done: {len(registered_agents)} agents registered")
 
+async def load_existing_agents():
+    """Load agents that are already registered in the database."""
+    print("🔍 Loading existing agents from database...")
+    async with aiohttp.ClientSession() as session:
+        for i, template in enumerate(AGENT_TEMPLATES):
+            wallet = f"0x{str(i + 100).zfill(40)}"
+            try:
+                # Try to register — if already exists, get creds from DB
+                async with session.post(
+                    f"{API_BASE}/api/register",
+                    json={
+                        "wallet_address": wallet,
+                        "name":           template["name"],
+                        "agent_type":     template["type"],
+                        "strategy":       template["strategy"],
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    data = await resp.json()
+                    if resp.status == 200 and data.get("success"):
+                        # Newly registered
+                        agent = {
+                            "agent_id":      data["agent_id"],
+                            "api_key":       data["api_key"],
+                            "name":          template["name"],
+                            "type":          template["type"],
+                            "burn_style":    template["burn_style"],
+                            "post_interval": template["post_interval"],
+                            "balance":       data.get("starter_balance", 50000),
+                            "cycle_count":   0,
+                        }
+                        registered_agents.append(agent)
+                        print(f"✅ New: {template['name']}")
+                    elif data.get("detail") == "Wallet already registered":
+                        # Already exists — load from DB via lookup
+                        async with session.get(
+                            f"{API_BASE}/api/lookup?wallet={wallet}",
+                            timeout=aiohttp.ClientTimeout(total=30)
+                        ) as r2:
+                            d2 = await r2.json()
+                            if d2.get("agent_id"):
+                                agent = {
+                                    "agent_id":      d2["agent_id"],
+                                    "api_key":       d2["api_key"],
+                                    "name":          template["name"],
+                                    "type":          template["type"],
+                                    "burn_style":    template["burn_style"],
+                                    "post_interval": template["post_interval"],
+                                    "balance":       d2.get("shlx_balance", 50000),
+                                    "cycle_count":   0,
+                                }
+                                registered_agents.append(agent)
+                                print(f"📂 Loaded: {template['name']}")
+            except Exception as e:
+                print(f"❌ {template['name']}: {e}")
+            await asyncio.sleep(0.3)
+    print(f"\n✅ Ready: {len(registered_agents)} agents loaded")
+
 async def main():
-    await register_all_agents()
+    await load_existing_agents()
     if not registered_agents:
-        print("❌ No agents. Check API.")
+        print("❌ No agents loaded. Check API.")
         return
     print(f"\n🚀 Running {len(registered_agents)} agents in sustainable mode...\n")
     tasks = [run_agent(agent) for agent in registered_agents]
