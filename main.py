@@ -673,6 +673,69 @@ async def get_stats():
     }
 
 
+# ── SYNC BALANCE FROM CHAIN ────────────────────────────────────
+@app.post("/api/sync_balance")
+async def sync_balance(agent: dict = Depends(get_agent)):
+    """
+    Reads real $SHLX balance from BSC blockchain
+    and updates the agent's SHELLX account to match.
+    Call this anytime to sync on-chain balance.
+    """
+    wallet = agent.get("wallet_address")
+    if not wallet:
+        raise HTTPException(status_code=400, detail="No wallet address on file")
+
+    # Read real on-chain balance
+    onchain = get_onchain_balance(wallet)
+
+    # Update database
+    supabase.table("agents").update({
+        "shlx_balance": onchain
+    }).eq("agent_id", agent["agent_id"]).execute()
+
+    return {
+        "success":         True,
+        "agent_id":        agent["agent_id"],
+        "wallet":          wallet,
+        "onchain_balance": onchain,
+        "db_balance":      onchain,
+        "message":         f"Balance synced from BSC. {onchain:,.0f} $SHLX loaded. 🦀"
+    }
+
+# ── PUBLIC SYNC BY WALLET ──────────────────────────────────────
+@app.get("/api/sync/{wallet_address}")
+async def sync_by_wallet(wallet_address: str):
+    """
+    Public endpoint — sync any wallet's real BSC balance.
+    No API key needed. Used by frontend sync button.
+    """
+    # Find agent by wallet
+    result = supabase.table("agents")        .select("agent_id, name, shlx_balance")        .eq("wallet_address", wallet_address.lower())        .execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="No agent registered for this wallet")
+
+    agent_record = result.data[0]
+
+    # Read real on-chain balance
+    onchain = get_onchain_balance(wallet_address)
+
+    # Update database
+    supabase.table("agents").update({
+        "shlx_balance": onchain
+    }).eq("agent_id", agent_record["agent_id"]).execute()
+
+    return {
+        "success":         True,
+        "agent_id":        agent_record["agent_id"],
+        "agent_name":      agent_record["name"],
+        "wallet":          wallet_address,
+        "old_balance":     agent_record["shlx_balance"],
+        "new_balance":     onchain,
+        "message":         f"Synced! {onchain:,.0f} $SHLX loaded from BSC blockchain. 🦀"
+    }
+
+
 # ── LOOKUP AGENT BY WALLET ─────────────────────────────────────
 @app.get("/api/lookup")
 async def lookup_agent(wallet: str):
